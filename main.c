@@ -1,5 +1,6 @@
 #include "parapipe.h"
 #include "ketopt.h"
+#include <omp.h>
 
 int main(int argc, char*argv[]) {
     struct config {
@@ -7,6 +8,7 @@ int main(int argc, char*argv[]) {
         int njob;
         int ispipe;
         int header;
+        int job_nline;
     };
 
     struct config config;
@@ -14,6 +16,7 @@ int main(int argc, char*argv[]) {
     config.njob = 2;
     config.header = 0;
     config.ispipe = 0;
+    config.job_nline = 10;
     static ko_longopt_t longopts[] = {
         {"pipe", ko_no_argument, 301},
         {"header", ko_optional_argument, 302},
@@ -21,11 +24,17 @@ int main(int argc, char*argv[]) {
     };
     ketopt_t opt = KETOPT_INIT;
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "j:", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "l:j:", longopts)) >= 0) {
         if (c == 'j') {
             config.njob = atoi(opt.arg);
             if (config.njob < 1) {
                 fprintf(stderr, "error: the number of jobs must be larger than zero.\n");
+                exit(11);
+            }
+        } else if (c  == 'l') {
+            config.job_nline = atoi(opt.arg);
+            if (config.job_nline < 1) {
+                fprintf(stderr, "error: the number of lines of each job must be larger than zero.\n");
                 exit(11);
             }
         } else if (c  == 301) {
@@ -66,10 +75,10 @@ int main(int argc, char*argv[]) {
         }
     }
 
-    parapipe(config.cmd, config.njob, header);
+    omp_set_num_threads(config.njob);
+    parapipe(config.cmd, header, config.njob, config.job_nline);
     
     gfree(header);
     return 0;
 }
-
 

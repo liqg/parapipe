@@ -19,13 +19,13 @@ int readlines(gstr_t *ret, int capacity, FILE *fp) {
 }
 
 
-int parapipe(char *cmd, int njob, char *header) {
+int parapipe(char *cmd, char *header, int njob, int job_nline) {
     struct job {
         FILE *fp;
     };
 
     FILE *fp = stdin;
-    int chunk_size = 10 * njob;
+    int chunk_size = job_nline * njob;
 
     gstr_t chunk[chunk_size];
     memset(chunk, 0, chunk_size * sizeof(gstr_t));
@@ -41,21 +41,20 @@ int parapipe(char *cmd, int njob, char *header) {
         job->fp =  fpout;
         if (header != NULL) {
             fprintf(fpout, "%s", header);
+            fflush(fpout);
         }
     }
     int nline;
     while((nline = readlines(chunk, chunk_size, fp))>0){
-        int n = 10;
-        int i = 0; 
-        while (i < nline) {
-            for (int j = 0; j < njob; j++) {
-                int end = i + n;
+        int nj = (nline - 1)/ job_nline + 1;
+        _Pragma("omp parallel for")
+            for (int j = 0; j < nj; j++) {
+                int end = (1+j) * job_nline;
                 if (end > nline) end = nline;
-                for (; i<end; i++) {
+                for (int i=j*job_nline; i<end; i++) {
                     fwrite(chunk[i].s, 1, chunk[i].l, jobs[j].fp);
                 }
             }
-        }
 
         for (int i=0; i < nline; i++) {
             gfree(chunk[i].s);
