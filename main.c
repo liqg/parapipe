@@ -26,14 +26,14 @@ Notice: The input orders are not guaranteed\n.");
     config.njob = 2;
     config.header = 0;
     config.ispipe = 0;
-    config.job_nline = 10;
+    config.job_nline = 100;
     static ko_longopt_t longopts[] = {
         {"pipe", ko_no_argument, 301},
         {NULL, 0, 0}
     };
     ketopt_t opt = KETOPT_INIT;
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "n:j:h", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "n:j:h:", longopts)) >= 0) {
         if (c == 'j') {
             config.njob = atoi(opt.arg);
             if (config.njob < 1) {
