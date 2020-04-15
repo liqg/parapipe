@@ -1,4 +1,6 @@
 #include "parapipe.h"
+#include <limits.h>
+#include <linux/limits.h>
 
 int readlines(gstr_t *ret, int capacity, FILE *fp) {
     char *line = NULL;

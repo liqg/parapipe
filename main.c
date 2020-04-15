@@ -33,7 +33,7 @@ Notice: The input orders are not guaranteed\n.");
     };
     ketopt_t opt = KETOPT_INIT;
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "n:j:h", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "n:j:h:", longopts)) >= 0) {
         if (c == 'j') {
             config.njob = atoi(opt.arg);
             if (config.njob < 1) {
