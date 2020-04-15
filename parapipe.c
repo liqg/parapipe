@@ -1,5 +1,6 @@
 #include "parapipe.h"
 #include "gstring.h"
+#include <stdio.h>
 
 int readlines(gstr_t *ret, int capacity, FILE *fp) {
     char *line = NULL;
@@ -74,6 +75,17 @@ void init_job(struct job *job, char *cmd) {
         job->fpw = fdopen(PARENT_WRITE, "w");
         job->fdr = PARENT_READ;
         job->fdw = PARENT_WRITE;
+        char buf[111];
+        char *l = NULL;
+        size_t len;
+        fprintf(job->fpw, "asdf\n");
+        int nread = getline(&l, &len, job->fpr);
+        for (int k=0; buf[k] != 0 && k<10; k++) {
+            if (buf[k] == '\n') {break;
+            }}
+        if (nread > 0)
+            printf("%s, %i", buf, nread);
+ 
         //close(PARENT_READ);
         //close(PARENT_WRITE);
     }
@@ -118,16 +130,7 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
 
     for (int i=0; i<njob; i++) {
         struct job *job=&jobs[i];
-        char buf[111];
-        char *l = NULL;
-        size_t len;
-        int nread = getline(&l, &len, job->fpr);
-        for (int k=0; buf[k] != 0 && k<10; k++) {
-            if (buf[k] == '\n') {break;
-            }}
-        if (nread > 0)
-            printf("%s, %i", buf, nread);
-        fclose(job->fpr);
+       fclose(job->fpr);
         fclose(job->fpw);
         close(job->fdr);
         close(job->fdw);
