@@ -4,10 +4,13 @@
 
 int main(int argc, char*argv[]) {
     if (argc < 2) {
-        printf("usage: echo asdf | parapipe \"wc\"\n \
-                -j the number of jobs\n\
-                -n the number of lines for each job\n\
-                -h the number of header, will repeat for each job\n");
+        printf(
+"Usage: echo asdf | parapipe \"wc\"\n\
+Arguments:\n\
+  -j the number of jobs.\n\
+  -n the number of lines for each job.\n\
+  -h the number of header, will repeat for each job.\n\
+Notice: The input orders are not guaranteed\n.");
         exit(11);
     }
     struct config {
