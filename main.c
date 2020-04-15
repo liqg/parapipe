@@ -3,6 +3,13 @@
 #include <omp.h>
 
 int main(int argc, char*argv[]) {
+    if (argc < 2) {
+        printf("usage: echo asdf | parapipe \"wc\"\n \
+                -j the number of jobs\n\
+                -n the number of lines for each job\n\
+                -h the number of header, will repeat for each job\n");
+        exit(11);
+    }
     struct config {
         char *cmd;
         int njob;
@@ -19,19 +26,18 @@ int main(int argc, char*argv[]) {
     config.job_nline = 10;
     static ko_longopt_t longopts[] = {
         {"pipe", ko_no_argument, 301},
-        {"header", ko_optional_argument, 302},
         {NULL, 0, 0}
     };
     ketopt_t opt = KETOPT_INIT;
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "l:j:", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "n:j:h", longopts)) >= 0) {
         if (c == 'j') {
             config.njob = atoi(opt.arg);
             if (config.njob < 1) {
                 fprintf(stderr, "error: the number of jobs must be larger than zero.\n");
                 exit(11);
             }
-        } else if (c  == 'l') {
+        } else if (c  == 'n') {
             config.job_nline = atoi(opt.arg);
             if (config.job_nline < 1) {
                 fprintf(stderr, "error: the number of lines of each job must be larger than zero.\n");
@@ -39,7 +45,7 @@ int main(int argc, char*argv[]) {
             }
         } else if (c  == 301) {
             config.ispipe = 1;
-        } else if (c  == 302) {
+        } else if (c  == 'h') {
             if (opt.arg != NULL) {
                 config.header = atoi(opt.arg);
                 if (config.header < 1) {

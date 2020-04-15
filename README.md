@@ -9,6 +9,6 @@ make
 ```
 ## Usage
 ```
-echo -e '#header\nline1\nline2' | ./parapipe --header=1 -j 3 "cat"
+echo -e '#header\nline1\nline2' | ./parapipe -h 1 -j 3 "cat"
 ```
 
