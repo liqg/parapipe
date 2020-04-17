@@ -153,6 +153,7 @@ void read_job(struct job *job) {
     while(1) {
         nread = read(job->fdr, buf, 4096);
         if (nread > 0) {
+            /*
             char *p = buf + nread;
             while (--p >= buf) { if (*p != '\n') break;}
             int remain  = 0;
@@ -171,6 +172,8 @@ void read_job(struct job *job) {
                 memcpy(gs->s, buf, remain);
                 vec_push(job->redbuf, gs);
             }
+            */
+            write(STDOUT_FILENO, buf, nread);
         } else break;
     }
 }
@@ -232,16 +235,19 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
             nread = read(job->fdr, buf, 4096);
             if (nread == 0) break;
             if (nread > 0) {
+                /*
                 int remain = nread;
                 gstr_t *gs = calloc(1, sizeof(gstr_t));
                 gs->l = remain;
                 gs->s = malloc(remain);
                 memcpy(gs->s, buf, remain);
                 vec_push(job->redbuf, gs);
+                */
+                write(STDOUT_FILENO, buf, nread);
             };
         }
-        fwrite_gstr_vec(job->redbuf, stdout);
-        fflush(stdout);
+        //fwrite_gstr_vec(job->redbuf, stdout);
+        //fflush(stdout);
         destroy_gstr_vec(&job->redbuf);
 
         close(job->fdr);
