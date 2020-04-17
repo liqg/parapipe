@@ -48,7 +48,6 @@ static inline void fwrite_gstr_vec (gstr_vec_t *gsv, FILE *fp) {
     gstr_t *gs = NULL;
     int i;
     vec_foreach(gsv, gs, i) {
-        //write(fileno(fp), gs->s, gs->l);
         int ret = fwrite(gs->s, 1, gs->l, fp);
         if (ret != gs->l) {
             perror("fwrite");
@@ -208,7 +207,6 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
             if (end > nline) end = nline;
             for (int i=j*job_nline; i<end; i++) {
                 if (chunk[i].l < 1) continue;
-                //write(job->fdw, chunk[i].s, chunk[i].l);
 
                 read_job(job, 0);
                 size_t nwrite = fwrite(chunk[i].s, 1, chunk[i].l, job->fpw);
@@ -237,7 +235,7 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
 
     for (int i=0; i<njob; i++) {
         struct job *job = &jobs[i];
-        // must change to block mode, or incomplete results
+        // must change into block mode, ortherwise output incomplete results
         fcntl(job->fdr, F_SETFL, job->old_fnctl);
         read_job(job, 1);
         fwrite_gstr_vec(job->redbuf, stdout);
