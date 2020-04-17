@@ -48,7 +48,7 @@ static inline void fwrite_gstr_vec (gstr_vec_t *gsv, FILE *fp) {
     gstr_t *gs = NULL;
     int i;
     vec_foreach(gsv, gs, i) {
-        fwrite(gs->s, gs->l, 1, fp);
+        fwrite(gs->s, 1, gs->l, fp);
     };
 }
 
@@ -147,6 +147,34 @@ void init_job(struct job *job, char *cmd) {
     }
 }
 
+void read_job(struct job *job) {
+    char buf[4096];
+    int nread;
+    while(1) {
+        nread = read(job->fdr, buf, 4096);
+        if (nread > 0) {
+            char *p = buf + nread;
+            while (--p >= buf) { if (*p != '\n') break;}
+            int remain  = 0;
+            if (p >= buf) { // with \n
+                fwrite_gstr_vec(job->redbuf, stdout);
+                fwrite(buf, 1, p - buf + 1, stdout);
+                fflush(stdout);
+                clean_gstr_vec(job->redbuf);
+            }
+            // number of chars after \n
+            remain = buf + nread - p - 1;
+            if (remain > 0) {
+                gstr_t *gs = calloc(1, sizeof(gstr_t));
+                gs->l = remain;
+                gs->s = malloc(remain);
+                memcpy(gs->s, buf, remain);
+                vec_push(job->redbuf, gs);
+            }
+        } else break;
+    }
+}
+
 int parapipe(char *cmd, char *header, int njob, int job_nline) {
     int chunk_size = job_nline * njob;
     gstr_t chunk[chunk_size];
@@ -171,37 +199,18 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
             int end = (1+j) * job_nline;
             if (end > nline) end = nline;
             for (int i=j*job_nline; i<end; i++) {
+                if (chunk[i].l < 1) continue;
                 //write(job->fdw, chunk[i].s, chunk[i].l);
-                fwrite(chunk[i].s, chunk[i].l, 1, job->fpw);
+                size_t nwrite = fwrite(chunk[i].s, 1, chunk[i].l, job->fpw);
+                if (nwrite != chunk[i].l) {
+                    fprintf(stderr, "%ld, %ld\n", nwrite, chunk[i].l);
+                    perror("fwrite");
+                    exit(11);
+                }
             }
             fflush(job->fpw);
 
-            char buf[4096];
-            int nread;
-            while(1) {
-                nread = read(job->fdr, buf, 4096);
-                if (nread > 0) {
-                    char *p = buf + nread;
-                    while (--p >= buf) { if (*p != '\n') break;}
-                    int remain  = 0;
-                    if (p >= buf) { // with \n
-                        fwrite_gstr_vec(job->redbuf, stdout);
-                        fwrite(buf, p - buf + 1, 1, stdout);
-                        fflush(stdout);
-                        clean_gstr_vec(job->redbuf);
-                    }
-                    // number of chars after \n
-                    remain = buf + nread - p - 1;
-                    if (remain > 0) {
-                        gstr_t *gs = calloc(1, sizeof(gstr_t));
-                        gs->l = remain;
-                        gs->s = malloc(remain);
-                        memcpy(gs->s, buf, remain);
-                        vec_push(job->redbuf, gs);
-                    }
-                } else break;
-            }
-
+            read_job(job);
         }
         for (int i=0; i < nline; i++) {
             gfree(chunk[i].s);
@@ -209,9 +218,10 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
         }
     } // finish writing
 
-    // must close all write-ends, I dont know why
+    // must close all write-ends, or only the last pipe can be read, I dont know why
     for (int i=0; i<njob; i++) {
         close(jobs[i].fdw);
+        fclose(jobs[i].fpw);
     }
 
     for (int i=0; i<njob; i++) {
@@ -237,6 +247,7 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
         close(job->fdr);
         //int status; waitpid(job->pid, &status, 0);
     }
+        fflush(stdout);
 
     return 0;
 }
