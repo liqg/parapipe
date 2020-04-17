@@ -1,8 +1,5 @@
 #include "parapipe.h"
-<<<<<<< HEAD
 #include <limits.h>
-#include <linux/limits.h>
-=======
 #include "gstring.h"
 #include "vec.h"
 #include <fcntl.h>
@@ -13,7 +10,6 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <omp.h>
->>>>>>> pipe
 
 int readlines(gstr_t *ret, int capacity, FILE *fp) {
     char *line = NULL;
@@ -247,7 +243,6 @@ int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
         close(jobs[i].fdw);
         fclose(jobs[i].fpw);
     }
-    //sleep(1);
 
     for (int i=0; i<njob; i++) {
         struct job *job = &jobs[i];
