@@ -48,7 +48,11 @@ static inline void fwrite_gstr_vec (gstr_vec_t *gsv, FILE *fp) {
     gstr_t *gs = NULL;
     int i;
     vec_foreach(gsv, gs, i) {
-        fwrite(gs->s, 1, gs->l, fp);
+        //write(fileno(fp), gs->s, gs->l);
+        int ret = fwrite(gs->s, 1, gs->l, fp);
+        if (ret != gs->l) {
+            perror("fwrite");
+        }
     };
 }
 
@@ -97,6 +101,7 @@ void subprocess(char *cmd, int *pid, int *fdr, int *fdw) {
     if ( (childpid = fork()) < 0)
     {
         /* FATAL: cannot fork child */
+        perror("fork failed");
     }
     else if ( childpid == 0 )   /* in the child */
     {
@@ -116,8 +121,7 @@ void subprocess(char *cmd, int *pid, int *fdr, int *fdw) {
         }
         */
         char *a[] = {"/bin/sh", "-c", cmd, NULL};
-        execvp(*a, a);
-        //execve(*a, a, environ);
+        execve(*a, a, environ);
         perror("execve failed");
         exit(127);
 
@@ -147,18 +151,21 @@ void init_job(struct job *job, char *cmd) {
     }
 }
 
-void read_job(struct job *job) {
-    char buf[4096];
+void read_job(struct job *job, int zerobreak) {
+#define BUFREADLEN 4096 
+    char buf[BUFREADLEN];
     int nread;
     while(1) {
-        nread = read(job->fdr, buf, 4096);
+        nread = read(job->fdr, buf, BUFREADLEN);
+        if (zerobreak > 0 && nread == 0) break; 
         if (nread > 0) {
-            /*
+            //write(STDOUT_FILENO, buf, nread);
             char *p = buf + nread;
-            while (--p >= buf) { if (*p != '\n') break;}
+            while (--p >= buf && *p != '\n'){}
             int remain  = 0;
             if (p >= buf) { // with \n
                 fwrite_gstr_vec(job->redbuf, stdout);
+                //fprintf(stdout, " BUG:zb=%i:pid=%i ", zerobreak, job->pid);
                 fwrite(buf, 1, p - buf + 1, stdout);
                 fflush(stdout);
                 clean_gstr_vec(job->redbuf);
@@ -169,11 +176,9 @@ void read_job(struct job *job) {
                 gstr_t *gs = calloc(1, sizeof(gstr_t));
                 gs->l = remain;
                 gs->s = malloc(remain);
-                memcpy(gs->s, buf, remain);
+                memcpy(gs->s, p+1, remain);
                 vec_push(job->redbuf, gs);
             }
-            */
-            write(STDOUT_FILENO, buf, nread);
         } else break;
     }
 }
@@ -204,6 +209,8 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
             for (int i=j*job_nline; i<end; i++) {
                 if (chunk[i].l < 1) continue;
                 //write(job->fdw, chunk[i].s, chunk[i].l);
+
+                read_job(job, 0);
                 size_t nwrite = fwrite(chunk[i].s, 1, chunk[i].l, job->fpw);
                 if (nwrite != chunk[i].l) {
                     fprintf(stderr, "%ld, %ld\n", nwrite, chunk[i].l);
@@ -213,7 +220,7 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
             }
             fflush(job->fpw);
 
-            read_job(job);
+            read_job(job, 0);
         }
         for (int i=0; i < nline; i++) {
             gfree(chunk[i].s);
@@ -226,34 +233,21 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
         close(jobs[i].fdw);
         fclose(jobs[i].fpw);
     }
+    //sleep(1);
 
     for (int i=0; i<njob; i++) {
         struct job *job = &jobs[i];
-        char buf[4096];
-        int nread = 0;
-        while(1) {
-            nread = read(job->fdr, buf, 4096);
-            if (nread == 0) break;
-            if (nread > 0) {
-                /*
-                int remain = nread;
-                gstr_t *gs = calloc(1, sizeof(gstr_t));
-                gs->l = remain;
-                gs->s = malloc(remain);
-                memcpy(gs->s, buf, remain);
-                vec_push(job->redbuf, gs);
-                */
-                write(STDOUT_FILENO, buf, nread);
-            };
-        }
-        //fwrite_gstr_vec(job->redbuf, stdout);
-        //fflush(stdout);
+        // must change to block mode, or incomplete results
+        fcntl(job->fdr, F_SETFL, job->old_fnctl);
+        read_job(job, 1);
+        fwrite_gstr_vec(job->redbuf, stdout);
+        fflush(stdout);
         destroy_gstr_vec(&job->redbuf);
 
         close(job->fdr);
-        //int status; waitpid(job->pid, &status, 0);
+        int status; waitpid(job->pid, &status, 0);
     }
-        fflush(stdout);
+    fflush(stdout);
 
     return 0;
 }
