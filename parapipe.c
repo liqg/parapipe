@@ -1,7 +1,9 @@
 #include "parapipe.h"
 #include "gstring.h"
+#include "vec.h"
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -25,14 +27,44 @@ int readlines(gstr_t *ret, int capacity, FILE *fp) {
     return n; 
 }
 
+typedef vec_t(gstr_t*) gstr_vec_t;
+
+static inline gstr_vec_t *init_gstr_vec(){
+    gstr_vec_t *gsv = calloc(1, sizeof(gstr_vec_t));
+    return gsv;
+}
+
+static inline void clean_gstr_vec (gstr_vec_t *gsv) {
+    gstr_t *gs = NULL;
+    int i;
+    vec_foreach(gsv, gs, i) {
+        gfree(gs->s);
+        gfree(gs);
+    };
+    vec_deinit(gsv);
+}
+
+static inline void fwrite_gstr_vec (gstr_vec_t *gsv, FILE *fp) {
+    gstr_t *gs = NULL;
+    int i;
+    vec_foreach(gsv, gs, i) {
+        fwrite(gs->s, gs->l, 1, fp);
+    };
+}
+
+static inline void destroy_gstr_vec (gstr_vec_t **gsv) {
+    clean_gstr_vec(gsv[0]);
+    gfree(gsv[0]);
+}
+
 struct job {
     char *cmd;
     int  pid;
     int  fdr;
-    FILE *fpr;
     int  old_fnctl;
     int  fdw;
     FILE *fpw;
+    gstr_vec_t *redbuf;
 };
 
 extern char **environ;
@@ -103,11 +135,11 @@ void subprocess(char *cmd, int *pid, int *fdr, int *fdw) {
 
 
 void init_job(struct job *job, char *cmd) {
+    job->redbuf = init_gstr_vec();
     job->cmd = cmd;
     subprocess(cmd, &job->pid, &job->fdr, &job->fdw);
     int old_fnctl = fcntl(job->fdr, F_GETFL, 0);
     job->old_fnctl = old_fnctl;
-    job->fpr = fdopen(job->fdr, "r");
     job->fpw = fdopen(job->fdw, "w");
     int retval = fcntl(job->fdr, F_SETFL, old_fnctl | O_NONBLOCK);
     if ( retval < 0) {
@@ -139,14 +171,34 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
             int end = (1+j) * job_nline;
             if (end > nline) end = nline;
             for (int i=j*job_nline; i<end; i++) {
-                write(job->fdw, chunk[i].s, chunk[i].l);
+                //write(job->fdw, chunk[i].s, chunk[i].l);
+                fwrite(chunk[i].s, chunk[i].l, 1, job->fpw);
             }
-            char buf[111];
+            fflush(job->fpw);
+
+            char buf[4096];
             int nread;
             while(1) {
-                nread = read(job->fdr, buf, 100);
+                nread = read(job->fdr, buf, 4096);
                 if (nread > 0) {
-                    write(STDOUT_FILENO, buf, nread);
+                    char *p = buf + nread;
+                    while (--p >= buf) { if (*p != '\n') break;}
+                    int remain  = 0;
+                    if (p >= buf) { // with \n
+                        fwrite_gstr_vec(job->redbuf, stdout);
+                        fwrite(buf, p - buf + 1, 1, stdout);
+                        fflush(stdout);
+                        clean_gstr_vec(job->redbuf);
+                    }
+                    // number of chars after \n
+                    remain = buf + nread - p - 1;
+                    if (remain > 0) {
+                        gstr_t *gs = calloc(1, sizeof(gstr_t));
+                        gs->l = remain;
+                        gs->s = malloc(remain);
+                        memcpy(gs->s, buf, remain);
+                        vec_push(job->redbuf, gs);
+                    }
                 } else break;
             }
 
@@ -157,20 +209,30 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
         }
     } // finish writing
 
-    // must close all write-ends,I dont why
+    // must close all write-ends, I dont know why
     for (int i=0; i<njob; i++) {
         close(jobs[i].fdw);
     }
 
     for (int i=0; i<njob; i++) {
         struct job *job = &jobs[i];
-        char buf[111];
+        char buf[4096];
         int nread = 0;
         while(1) {
-            nread = read(job->fdr, buf, 10);
-            if (nread > 0) write(STDOUT_FILENO, buf, nread);
+            nread = read(job->fdr, buf, 4096);
             if (nread == 0) break;
+            if (nread > 0) {
+                int remain = nread;
+                gstr_t *gs = calloc(1, sizeof(gstr_t));
+                gs->l = remain;
+                gs->s = malloc(remain);
+                memcpy(gs->s, buf, remain);
+                vec_push(job->redbuf, gs);
+            };
         }
+        fwrite_gstr_vec(job->redbuf, stdout);
+        fflush(stdout);
+        destroy_gstr_vec(&job->redbuf);
 
         close(job->fdr);
         //int status; waitpid(job->pid, &status, 0);
