@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <omp.h>
 
 int readlines(gstr_t *ret, int capacity, FILE *fp) {
     char *line = NULL;
@@ -148,10 +149,20 @@ void init_job(struct job *job, char *cmd) {
     if ( retval < 0) {
         perror("fnctl error");
     }
+    retval = fcntl(job->fdr, F_SETPIPE_SZ, 1024*1024);
+    if (retval < 0) {
+        perror("failed to set pipe size");
+        exit(11);
+    }
+    retval = fcntl(job->fdw, F_SETPIPE_SZ, 1024*1024);
+    if (retval < 0) {
+        perror("failed to set pipe size");
+        exit(11);
+    }
 }
 
 void read_job(struct job *job, int zerobreak) {
-#define BUFREADLEN 4096 
+#define BUFREADLEN 1024
     char buf[BUFREADLEN];
     int nread;
     while(1) {
@@ -163,10 +174,13 @@ void read_job(struct job *job, int zerobreak) {
             while (--p >= buf && *p != '\n'){}
             int remain  = 0;
             if (p >= buf) { // with \n
-                fwrite_gstr_vec(job->redbuf, stdout);
-                //fprintf(stdout, " BUG:zb=%i:pid=%i ", zerobreak, job->pid);
-                fwrite(buf, 1, p - buf + 1, stdout);
-                fflush(stdout);
+                _Pragma("omp critical")
+                {
+                    fwrite_gstr_vec(job->redbuf, stdout);
+                    //fprintf(stdout, " BUG:zb=%i:pid=%i ", zerobreak, job->pid);
+                    fwrite(buf, 1, p - buf + 1, stdout);
+                    fflush(stdout);
+                }
                 clean_gstr_vec(job->redbuf);
             }
             // number of chars after \n
@@ -182,10 +196,9 @@ void read_job(struct job *job, int zerobreak) {
     }
 }
 
-int parapipe(char *cmd, char *header, int njob, int job_nline) {
-    int chunk_size = job_nline * njob;
-    gstr_t chunk[chunk_size];
-    memset(chunk, 0, chunk_size * sizeof(gstr_t));
+int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
+    gstr_t chunk[chunk_nline];
+    memset(chunk, 0, chunk_nline * sizeof(gstr_t));
 
     struct job jobs[njob];
     memset(jobs, 0, sizeof(struct job));
@@ -198,31 +211,29 @@ int parapipe(char *cmd, char *header, int njob, int job_nline) {
         }
     }
     int nline;
-    while((nline = readlines(chunk, chunk_size, stdin))>0) {
-        int nj = (nline - 1)/ job_nline + 1;
-        //_Pragma("omp parallel for")
-        for (int j = 0; j < nj; j++) {
-            struct job *job = &jobs[j];
-            int end = (1+j) * job_nline;
-            if (end > nline) end = nline;
-            for (int i=j*job_nline; i<end; i++) {
-                if (chunk[i].l < 1) continue;
-
-                read_job(job, 0);
-                size_t nwrite = fwrite(chunk[i].s, 1, chunk[i].l, job->fpw);
-                if (nwrite != chunk[i].l) {
-                    fprintf(stderr, "%ld, %ld\n", nwrite, chunk[i].l);
-                    perror("fwrite");
-                    exit(11);
+    while((nline = readlines(chunk, chunk_nline, stdin))>0) {
+        _Pragma("omp parallel") {
+            int tid = omp_get_thread_num();
+            struct job *job = &jobs[tid];
+            _Pragma("omp for")
+                for (int i = 0; i < nline; i++) {
+                    if (chunk[i].l < 1) continue;
+                    read_job(job, 0);
+                    //fprintf(stderr, "write to pipe, %ld, %i\n", chunk[i].l, fcntl(job->fdw, F_GETPIPE_SZ));
+                    size_t nwrite = fwrite(chunk[i].s, 1, chunk[i].l, job->fpw);
+                    //size_t nwrite = write(job->fdw, chunk[i].s, chunk[i].l);
+                    if (nwrite != chunk[i].l) {
+                        fprintf(stderr, "%ld, %ld\n", nwrite, chunk[i].l);
+                        perror("fwrite");
+                        exit(11);
+                    }
+                    //fprintf(stderr, "fflush pipe\n");
+                    fflush(job->fpw);
+                    //fprintf(stderr, "read from pipe\n");
+                    //read_job(job, 0);
+                    gfree(chunk[i].s);
+                    chunk[i].l = 0;
                 }
-            }
-            fflush(job->fpw);
-
-            read_job(job, 0);
-        }
-        for (int i=0; i < nline; i++) {
-            gfree(chunk[i].s);
-            chunk[i].l = 0;
         }
     } // finish writing
 

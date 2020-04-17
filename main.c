@@ -18,7 +18,7 @@ Notice: The input orders are not guaranteed\n.");
         int njob;
         int ispipe;
         int header;
-        int job_nline;
+        int chunk_nline;
     };
 
     struct config config;
@@ -26,7 +26,7 @@ Notice: The input orders are not guaranteed\n.");
     config.njob = 2;
     config.header = 0;
     config.ispipe = 0;
-    config.job_nline = 100;
+    config.chunk_nline = 100;
     static ko_longopt_t longopts[] = {
         {"pipe", ko_no_argument, 301},
         {NULL, 0, 0}
@@ -41,8 +41,8 @@ Notice: The input orders are not guaranteed\n.");
                 exit(11);
             }
         } else if (c  == 'n') {
-            config.job_nline = atoi(opt.arg);
-            if (config.job_nline < 1) {
+            config.chunk_nline = atoi(opt.arg);
+            if (config.chunk_nline < 1) {
                 fprintf(stderr, "error: the number of lines of each job must be larger than zero.\n");
                 exit(11);
             }
@@ -85,7 +85,7 @@ Notice: The input orders are not guaranteed\n.");
     }
 
     omp_set_num_threads(config.njob);
-    parapipe(config.cmd, header, config.njob, config.job_nline);
+    parapipe(config.cmd, header, config.njob, config.chunk_nline);
     
     gfree(header);
     return 0;
