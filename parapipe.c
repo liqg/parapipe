@@ -177,7 +177,7 @@ static void fwrite_job(gstr_t *gs, FILE *fp) {
     }
 }
 
-int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
+int parapipe(char *cmd, char *header, int njob) {
     struct job jobs[njob];
     memset(jobs, 0, sizeof(struct job));
     for (int i=0; i<njob; i++) {
@@ -190,13 +190,13 @@ int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
     }
     gstr_t remain = {0, NULL};
     int partsize = 1024*8;
-    int chunk_size = partsize * njob * 2;
+    int chunk_size = partsize * njob * 4;
     char *chunk = malloc(chunk_size);
     size_t nread = 0;
     while ((nread = fread(chunk, 1, chunk_size, stdin))>0) {
         int npart = (nread - 1) / partsize + 1;
         char *parts[npart];
-        _Pragma("omp parallel for") 
+        _Pragma("omp parallel for schedule(dynamic, 2)") 
             for (int i=0; i<npart; i++) {
                 parts[i] = memchr(chunk + i*partsize, '\n', partsize); 
             }
@@ -210,7 +210,7 @@ int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
         _Pragma("omp parallel") {
             int tid = omp_get_thread_num();
             struct job *job = &jobs[tid];
-           _Pragma("omp for")
+           _Pragma("omp for schedule(dynamic, 2)")
                 for (int i=0; i<npart; i++) {
                     read_job(job);
                     if (i==0) {
