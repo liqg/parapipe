@@ -135,12 +135,13 @@ void init_job(struct job *job, char *cmd) {
     }
 }
 
+static const int JOBPARTSIZE = 1024*8;
+
 void read_job(struct job *job) {
-#define BUFREADLEN 1024
-    char buf[BUFREADLEN];
+    char buf[JOBPARTSIZE];
     int nread;
     while(1) {
-        nread = read(job->fdr, buf, BUFREADLEN);
+        nread = read(job->fdr, buf, JOBPARTSIZE);
         if (nread > 0) {
             //write(STDOUT_FILENO, buf, nread);
             char *p = buf + nread;
@@ -189,16 +190,19 @@ int parapipe(char *cmd, char *header, int njob) {
         }
     }
     gstr_t remain = {0, NULL};
-    int partsize = 1024*8;
-    int chunk_size = partsize * njob * 4;
+    int chunk_size = JOBPARTSIZE * njob * 4;
     char *chunk = malloc(chunk_size);
     size_t nread = 0;
     while ((nread = fread(chunk, 1, chunk_size, stdin))>0) {
-        int npart = (nread - 1) / partsize + 1;
+        int npart = (nread - 1) / JOBPARTSIZE + 1;
         char *parts[npart];
         _Pragma("omp parallel for schedule(dynamic, 2)") 
             for (int i=0; i<npart; i++) {
-                parts[i] = memchr(chunk + i*partsize, '\n', partsize); 
+                if (i == npart - 1) 
+                    parts[i] = memchr(chunk + i*JOBPARTSIZE, '\n', nread - i*JOBPARTSIZE); 
+
+                else
+                    parts[i] = memchr(chunk + i*JOBPARTSIZE, '\n', JOBPARTSIZE); 
             }
 
         int npart1 = 0;
@@ -210,7 +214,7 @@ int parapipe(char *cmd, char *header, int njob) {
         _Pragma("omp parallel") {
             int tid = omp_get_thread_num();
             struct job *job = &jobs[tid];
-           _Pragma("omp for schedule(dynamic, 2)")
+            _Pragma("omp for schedule(dynamic, 2)")
                 for (int i=0; i<npart; i++) {
                     read_job(job);
                     if (i==0) {
@@ -250,7 +254,7 @@ int parapipe(char *cmd, char *header, int njob) {
         gfree(remain.s); remain.l = 0;
     }
     gfree(chunk);
-    
+
     // must close all write-ends, or only the last pipe can be read, I dont know why
     for (int i=0; i<njob; i++) {
         close(jobs[i].fdw);
