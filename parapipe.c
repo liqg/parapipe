@@ -111,16 +111,7 @@ void subprocess(char *cmd, int *pid, int *fdr, int *fdw) {
 
         dup2(CHILD_READ,  0);  close(CHILD_READ);
         dup2(CHILD_WRITE, 1);  close(CHILD_WRITE);
-        /*
-        char buf[111];
-        while (1)
-        {
-            memcpy(buf, "abcdefghi\0",10);
-            fwrite(buf, 10, 1, stdout);
-            fflush(stdout);
-            sleep(1);
-        }
-        */
+        
         char *a[] = {"/bin/sh", "-c", cmd, NULL};
         execve(*a, a, environ);
         perror("execve failed");
@@ -162,13 +153,12 @@ void init_job(struct job *job, char *cmd) {
     }
 }
 
-void read_job(struct job *job, int zerobreak) {
+void read_job(struct job *job) {
 #define BUFREADLEN 1024
     char buf[BUFREADLEN];
     int nread;
     while(1) {
         nread = read(job->fdr, buf, BUFREADLEN);
-        if (zerobreak > 0 && nread == 0) break; 
         if (nread > 0) {
             //write(STDOUT_FILENO, buf, nread);
             char *p = buf + nread;
@@ -216,10 +206,10 @@ int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
         _Pragma("omp parallel") {
             int tid = omp_get_thread_num();
             struct job *job = &jobs[tid];
-            _Pragma("omp for")
+            _Pragma("omp for schedule(dynamic, 2)")
                 for (int i = 0; i < nline; i++) {
                     if (chunk[i].l < 1) continue;
-                    read_job(job, 0);
+                    read_job(job);
                     //fprintf(stderr, "write to pipe, %ld, %i\n", chunk[i].l, fcntl(job->fdw, F_GETPIPE_SZ));
                     size_t nwrite = fwrite(chunk[i].s, 1, chunk[i].l, job->fpw);
                     //size_t nwrite = write(job->fdw, chunk[i].s, chunk[i].l);
@@ -248,7 +238,7 @@ int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
         struct job *job = &jobs[i];
         // must change into block mode, ortherwise output incomplete results
         fcntl(job->fdr, F_SETFL, job->old_fnctl);
-        read_job(job, 1);
+        read_job(job);
         fwrite_gstr_vec(job->redbuf, stdout);
         fflush(stdout);
         destroy_gstr_vec(&job->redbuf);
