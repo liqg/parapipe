@@ -11,24 +11,6 @@
 #include <errno.h>
 #include <omp.h>
 
-int readlines(gstr_t *ret, int capacity, FILE *fp) {
-    char *line = NULL;
-    size_t len = 0;
-    int nread = -1; 
-    int n = 0;;
-    for(int i=0; i < capacity; i++) {
-        line =  NULL;
-        nread = getline(&line, &len, fp);
-        if(nread == -1) {
-            gfree(line);
-            break;
-        }
-        ret[i] = (gstr_t){nread, line};
-        n++;
-    }
-    return n; 
-}
-
 typedef vec_t(gstr_t*) gstr_vec_t;
 
 static inline gstr_vec_t *init_gstr_vec(){
@@ -69,7 +51,7 @@ struct job {
     int  old_fnctl;
     int  fdw;
     FILE *fpw;
-    gstr_vec_t *redbuf;
+    gstr_vec_t *readbuf;
 };
 
 extern char **environ;
@@ -131,7 +113,7 @@ void subprocess(char *cmd, int *pid, int *fdr, int *fdw) {
 
 
 void init_job(struct job *job, char *cmd) {
-    job->redbuf = init_gstr_vec();
+    job->readbuf = init_gstr_vec();
     job->cmd = cmd;
     subprocess(cmd, &job->pid, &job->fdr, &job->fdw);
     int old_fnctl = fcntl(job->fdr, F_GETFL, 0);
@@ -167,12 +149,12 @@ void read_job(struct job *job) {
             if (p >= buf) { // with \n
                 _Pragma("omp critical")
                 {
-                    fwrite_gstr_vec(job->redbuf, stdout);
+                    fwrite_gstr_vec(job->readbuf, stdout);
                     //fprintf(stdout, " BUG:zb=%i:pid=%i ", zerobreak, job->pid);
                     fwrite(buf, 1, p - buf + 1, stdout);
                     fflush(stdout);
                 }
-                clean_gstr_vec(job->redbuf);
+                clean_gstr_vec(job->readbuf);
             }
             // number of chars after \n
             remain = buf + nread - p - 1;
@@ -181,16 +163,21 @@ void read_job(struct job *job) {
                 gs->l = remain;
                 gs->s = malloc(remain);
                 memcpy(gs->s, p+1, remain);
-                vec_push(job->redbuf, gs);
+                vec_push(job->readbuf, gs);
             }
         } else break;
     }
 }
+static void fwrite_job(gstr_t *gs, FILE *fp) {
+    size_t nwrite = fwrite(gs->s, 1, gs->l, fp);
+    if (nwrite != gs->l) {
+        fprintf(stderr, "%ld, %ld\n", nwrite, gs->l);
+        perror("fwrite");
+        exit(11);
+    }
+}
 
 int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
-    gstr_t chunk[chunk_nline];
-    memset(chunk, 0, chunk_nline * sizeof(gstr_t));
-
     struct job jobs[njob];
     memset(jobs, 0, sizeof(struct job));
     for (int i=0; i<njob; i++) {
@@ -201,33 +188,69 @@ int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
             fflush(job->fpw);
         }
     }
-    int nline;
-    while((nline = readlines(chunk, chunk_nline, stdin))>0) {
+    gstr_t remain = {0, NULL};
+    int partsize = 1024*8;
+    int chunk_size = partsize * njob * 2;
+    char *chunk = malloc(chunk_size);
+    size_t nread = 0;
+    while ((nread = fread(chunk, 1, chunk_size, stdin))>0) {
+        int npart = (nread - 1) / partsize + 1;
+        char *parts[npart];
+        _Pragma("omp parallel for") 
+            for (int i=0; i<npart; i++) {
+                parts[i] = memchr(chunk + i*partsize, '\n', partsize); 
+            }
+
+        int npart1 = 0;
+        for (int i=0; i<npart; i++) {
+            if (parts[i] !=NULL) parts[npart1++] = parts[i];
+        }
+        npart = npart1;
+
         _Pragma("omp parallel") {
             int tid = omp_get_thread_num();
             struct job *job = &jobs[tid];
-            _Pragma("omp for schedule(dynamic, 2)")
-                for (int i = 0; i < nline; i++) {
-                    if (chunk[i].l < 1) continue;
+           _Pragma("omp for")
+                for (int i=0; i<npart; i++) {
                     read_job(job);
-                    //fprintf(stderr, "write to pipe, %ld, %i\n", chunk[i].l, fcntl(job->fdw, F_GETPIPE_SZ));
-                    size_t nwrite = fwrite(chunk[i].s, 1, chunk[i].l, job->fpw);
-                    //size_t nwrite = write(job->fdw, chunk[i].s, chunk[i].l);
-                    if (nwrite != chunk[i].l) {
-                        fprintf(stderr, "%ld, %ld\n", nwrite, chunk[i].l);
-                        perror("fwrite");
-                        exit(11);
+                    if (i==0) {
+                        if (remain.s != NULL) fwrite_job(&remain, job->fpw);
+                        gstr_t gs; gs.s = chunk; gs.l = parts[i] - chunk + 1;
+                        fwrite_job(&gs, job->fpw);
+                    } else {
+                        gstr_t gs; gs.s = parts[i-1]+1; gs.l = parts[i] - parts[i-1];
+                        fwrite_job(&gs, job->fpw);
                     }
-                    //fprintf(stderr, "fflush pipe\n");
-                    fflush(job->fpw);
-                    //fprintf(stderr, "read from pipe\n");
-                    //read_job(job, 0);
-                    gfree(chunk[i].s);
-                    chunk[i].l = 0;
                 }
         }
-    } // finish writing
 
+        if (npart > 0) {
+            gfree(remain.s); remain.l = 0;
+            remain.l = chunk+ nread - parts[npart-1] - 1;
+            if (remain.l > 0) {
+                remain.s = malloc(remain.l);
+                memcpy(remain.s, parts[npart-1]+1, remain.l);
+            }
+        } else {
+            gstr_t gs; 
+            gs.l = remain.l + nread;
+            gs.s = malloc(gs.l);
+            if (remain.l > 0) memcpy(gs.s, remain.s, remain.l);
+            memcpy(gs.s+remain.l, chunk, nread);
+            gfree(remain.s);
+            remain = gs;
+        }
+        for (int i=0; i<njob; i++) { fflush(jobs[i].fpw); }
+    }
+
+    if (remain.l > 0) {
+        read_job(&jobs[0]);
+        fwrite_job(&remain, jobs[0].fpw);
+        fflush(jobs[0].fpw);
+        gfree(remain.s); remain.l = 0;
+    }
+    gfree(chunk);
+    
     // must close all write-ends, or only the last pipe can be read, I dont know why
     for (int i=0; i<njob; i++) {
         close(jobs[i].fdw);
@@ -239,9 +262,9 @@ int parapipe(char *cmd, char *header, int njob, int chunk_nline) {
         // must change into block mode, ortherwise output incomplete results
         fcntl(job->fdr, F_SETFL, job->old_fnctl);
         read_job(job);
-        fwrite_gstr_vec(job->redbuf, stdout);
+        fwrite_gstr_vec(job->readbuf, stdout);
         fflush(stdout);
-        destroy_gstr_vec(&job->redbuf);
+        destroy_gstr_vec(&job->readbuf);
 
         close(job->fdr);
         int status; waitpid(job->pid, &status, 0);
