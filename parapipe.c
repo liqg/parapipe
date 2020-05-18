@@ -178,7 +178,7 @@ static void fwrite_job(gstr_t *gs, FILE *fp) {
     }
 }
 
-int parapipe(char *cmd, char *header, int njob) {
+int parapipe(char *cmd, char *header, int njob, gstr_t remain) {
     struct job jobs[njob];
     memset(jobs, 0, sizeof(struct job));
     for (int i=0; i<njob; i++) {
@@ -189,7 +189,7 @@ int parapipe(char *cmd, char *header, int njob) {
             fflush(job->fpw);
         }
     }
-    gstr_t remain = {0, NULL};
+    //gstr_t remain = {0, NULL};
     int chunk_size = JOBPARTSIZE * njob * 4;
     char *chunk = malloc(chunk_size);
     size_t nread = 0;
@@ -200,7 +200,6 @@ int parapipe(char *cmd, char *header, int njob) {
             for (int i=0; i<npart; i++) {
                 if (i == npart - 1) 
                     parts[i] = memchr(chunk + i*JOBPARTSIZE, '\n', nread - i*JOBPARTSIZE); 
-
                 else
                     parts[i] = memchr(chunk + i*JOBPARTSIZE, '\n', JOBPARTSIZE); 
             }

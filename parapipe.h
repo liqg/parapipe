@@ -14,12 +14,14 @@
 
 #define gfree(x) do {if(x != NULL){free(x); x = NULL;}} while(0)
 
-int parapipe(char *cmd, char *header, int njob);
+int parapipe(char *cmd, char *header, int njob, gstr_t remain);
+
+ssize_t getline(char **, size_t*, FILE *);
 
 static inline int readlines(gstr_t *ret, int capacity, FILE *fp) {
     char *line = NULL;
     size_t len = 0;
-    int nread = -1; 
+    ssize_t nread = -1; 
     int n = 0;;
     for(int i=0; i < capacity; i++) {
         line =  NULL;

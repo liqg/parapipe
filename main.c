@@ -1,6 +1,10 @@
+#include "gstring.h"
 #include "parapipe.h"
 #include "ketopt.h"
 #include <omp.h>
+#include <stdlib.h>
+#include "vec.h"
+typedef vec_t(gstr_t) gvec_t;
 
 int main(int argc, char*argv[]) {
     if (argc < 2) {
@@ -30,6 +34,10 @@ Notice: The input orders are not guaranteed\n.");
     };
     ketopt_t opt = KETOPT_INIT;
     int c;
+    char *header = NULL;
+    gvec_t *header_vec = calloc(1, sizeof(gvec_t));
+
+    gstr_t remain = {0, NULL};
     while ((c = ketopt(&opt, argc, argv, 1, "j:h:", longopts)) >= 0) {
         if (c == 'j') {
             config.njob = atoi(opt.arg);
@@ -41,10 +49,26 @@ Notice: The input orders are not guaranteed\n.");
             config.ispipe = 1;
         } else if (c  == 'h') {
             if (opt.arg != NULL) {
-                config.header = atoi(opt.arg);
-                if (config.header < 1) {
-                    fprintf(stderr, "error: the number of header must be larger than zero.\n");
-                    exit(11);
+                if (opt.arg[0] == '^') {
+                    if (strlen(opt.arg) < 2) {
+                        fprintf(stderr, "error: not found starting string.\n");
+                        exit(11);
+                    }
+                    while (1) {
+                        int n = readlines(&remain, 1, stdin);
+                        if (n != 1 || gstrstartwith(remain, (gstr_t) {strlen(opt.arg+1), opt.arg+1})<0) {
+                            break;
+                        } else {
+                            vec_push(header_vec, remain);
+                            remain.l = 0; remain.s = NULL;
+                        }
+                    }
+                } else {
+                    config.header = atoi(opt.arg);
+                    if (config.header < 1) {
+                        fprintf(stderr, "error: the number of header must be larger than zero.\n");
+                        exit(11);
+                    }
                 }
             } else {
                 config.header = 1;
@@ -57,7 +81,6 @@ Notice: The input orders are not guaranteed\n.");
     config.cmd = argv[opt.ind];
 
     // printf("%s\n", config.cmd);
-    char *header = NULL;
     if (config.header > 0) {
         gstr_t lines[config.header];
         int nline = readlines(lines, config.header, stdin);
@@ -75,9 +98,26 @@ Notice: The input orders are not guaranteed\n.");
         }
     }
 
+    if (header_vec->length > 0) {
+        assert(header == NULL);
+        int len = 0;
+        for (int i=0; i<header_vec->length; i++) {
+            len += header_vec->data[i].l;
+        }
+        header = calloc(len+1, 1);
+        len = 0;
+        for (int i=0; i<header_vec->length; i++) {
+            memcpy(header + len, header_vec->data[i].s, header_vec->data[i].l);
+            len += header_vec->data[i].l;
+            gfree(header_vec->data[i].s);
+        }
+        gfree(header_vec->data);
+        gfree(header_vec);
+    }
+
     omp_set_num_threads(config.njob);
-    parapipe(config.cmd, header, config.njob);
-    
+    parapipe(config.cmd, header, config.njob, remain);
+
     gfree(header);
     return 0;
 }
