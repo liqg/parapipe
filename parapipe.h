@@ -14,7 +14,7 @@
 
 #define gfree(x) do {if(x != NULL){free(x); x = NULL;}} while(0)
 
-int parapipe(char *cmd, char *header, int njob, gstr_t remain);
+int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nrow);
 
 ssize_t getline(char **, size_t*, FILE *);
 

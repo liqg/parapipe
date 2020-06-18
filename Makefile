@@ -1,7 +1,7 @@
 .PHONY: default
 default: all
 CC=gcc
-CFLAG=-g -O3 -fPIC -std=c99 -fopenmp
+CFLAG=-g -O0 -fPIC -std=c99 -fopenmp
 objs=parapipe.o
 
 parapipe.o: parapipe.c parapipe.h

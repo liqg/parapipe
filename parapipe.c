@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -50,8 +51,10 @@ struct job {
     int  fdr;
     int  old_fnctl;
     int  fdw;
+    int  out_record_nline;
     FILE *fpw;
     gstr_vec_t *readbuf;
+    int  readbuf_nline;
 };
 
 extern char **environ;
@@ -112,8 +115,10 @@ void subprocess(char *cmd, int *pid, int *fdr, int *fdw) {
 }
 
 
-void init_job(struct job *job, char *cmd) {
+void init_job(struct job *job, char *cmd, int out_record_nline) {
+    job->out_record_nline = out_record_nline;
     job->readbuf = init_gstr_vec();
+    job->readbuf_nline = 0;
     job->cmd = cmd;
     subprocess(cmd, &job->pid, &job->fdr, &job->fdw);
     int old_fnctl = fcntl(job->fdr, F_GETFL, 0);
@@ -135,7 +140,7 @@ void init_job(struct job *job, char *cmd) {
     }
 }
 
-static const int JOBPARTSIZE = 1024*8;
+static const int JOBPARTSIZE = 1024*16;
 
 void read_job(struct job *job) {
     char buf[JOBPARTSIZE];
@@ -143,22 +148,33 @@ void read_job(struct job *job) {
     while(1) {
         nread = read(job->fdr, buf, JOBPARTSIZE);
         if (nread > 0) {
-            //write(STDOUT_FILENO, buf, nread);
-            char *p = buf + nread;
-            while (--p >= buf && *p != '\n'){}
-            int remain  = 0;
+            char *p = buf - 1;
+            if (job->out_record_nline > 1) {
+                char *s = buf;
+                while(s < buf + nread) {
+                    if (*s == '\n' && ++job->readbuf_nline == job->out_record_nline) {
+                        p = s;
+                        job->readbuf_nline = 0;
+                    }
+                    s++;
+                }
+            } else {
+                p = buf + nread - 1;
+                while(p >= buf && *p != '\n') {
+                    p--;
+                }
+            }
             if (p >= buf) { // with \n
                 _Pragma("omp critical")
                 {
                     fwrite_gstr_vec(job->readbuf, stdout);
-                    //fprintf(stdout, " BUG:zb=%i:pid=%i ", zerobreak, job->pid);
                     fwrite(buf, 1, p - buf + 1, stdout);
                     fflush(stdout);
                 }
                 clean_gstr_vec(job->readbuf);
             }
             // number of chars after \n
-            remain = buf + nread - p - 1;
+            int remain = buf + nread - p - 1;
             if (remain > 0) {
                 gstr_t *gs = calloc(1, sizeof(gstr_t));
                 gs->l = remain;
@@ -169,6 +185,7 @@ void read_job(struct job *job) {
         } else break;
     }
 }
+
 static void fwrite_job(gstr_t *gs, FILE *fp) {
     size_t nwrite = fwrite(gs->s, 1, gs->l, fp);
     if (nwrite != gs->l) {
@@ -178,12 +195,22 @@ static void fwrite_job(gstr_t *gs, FILE *fp) {
     }
 }
 
-int parapipe(char *cmd, char *header, int njob, gstr_t remain) {
+char *memchr_rev(char *p, int c, int l) {
+    char *end = p - l;
+    while (p > end) {
+        if (*p == c) break;
+        p--;
+    }
+    if (p == end) return NULL;
+    else return p;
+}
+
+int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nline) {
     struct job jobs[njob];
     memset(jobs, 0, sizeof(struct job));
     for (int i=0; i<njob; i++) {
         struct job *job = &jobs[i];
-        init_job(job, cmd);
+        init_job(job, cmd, record_nline);
         if (header != NULL) {
             fprintf(job->fpw, "%s", header);
             fflush(job->fpw);
@@ -196,12 +223,12 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain) {
     while ((nread = fread(chunk, 1, chunk_size, stdin))>0) {
         int npart = (nread - 1) / JOBPARTSIZE + 1;
         char *parts[npart];
-        _Pragma("omp parallel for schedule(dynamic, 2)") 
+        _Pragma("omp parallel for") 
             for (int i=0; i<npart; i++) {
                 if (i == npart - 1) 
-                    parts[i] = memchr(chunk + i*JOBPARTSIZE, '\n', nread - i*JOBPARTSIZE); 
+                    parts[i] = memchr_rev(chunk + nread - 1, '\n', nread - i*JOBPARTSIZE); 
                 else
-                    parts[i] = memchr(chunk + i*JOBPARTSIZE, '\n', JOBPARTSIZE); 
+                    parts[i] = memchr_rev(chunk + (i+1)*JOBPARTSIZE - 1, '\n', JOBPARTSIZE); 
             }
 
         int npart1 = 0;
@@ -210,12 +237,49 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain) {
         }
         npart = npart1;
 
-        _Pragma("omp parallel") {
+        if (record_nline > 1 && npart > 0) {
+            int n1 = 0;
+            for(char *p = remain.s; p <remain.s + remain.l; p++) {
+                if (*p == '\n') n1++; 
+            }
+            int part_nlines[npart];
+            _Pragma("omp parallel for")
+                for (int i=0; i<npart; i++) {
+                    part_nlines[i] = 0;
+                    char *p = parts[i];
+                    char *end = i == 0 ? chunk - 1: parts[i-1];
+                    while (p > end) {
+                        if (*p == '\n') part_nlines[i]++;
+                        p--;
+                    }
+                }
+
+            npart1 = 0;
+            for (int i=0; i<npart; i++) {
+                n1 += part_nlines[i];
+                if (n1 >= record_nline) {
+                    n1 = n1 % record_nline;
+                    char *p = parts[i] - 1;
+                    int  n = n1;
+                    while(n > 0) {
+                        if (*p == '\n') {
+                            n--;
+                        }
+                        p--;
+                    }
+                    parts[npart1++] = p + 1;
+                }
+            }
+            npart = npart1;
+        }
+
+        _Pragma("omp parallel")
+        {
             int tid = omp_get_thread_num();
             struct job *job = &jobs[tid];
+                read_job(job);
             _Pragma("omp for schedule(dynamic, 2)")
                 for (int i=0; i<npart; i++) {
-                    read_job(job);
                     if (i==0) {
                         if (remain.s != NULL) fwrite_job(&remain, job->fpw);
                         gstr_t gs; gs.s = chunk; gs.l = parts[i] - chunk + 1;
@@ -225,6 +289,7 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain) {
                         fwrite_job(&gs, job->fpw);
                     }
                 }
+
         }
 
         if (npart > 0) {
@@ -254,7 +319,7 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain) {
     }
     gfree(chunk);
 
-    // must close all write-ends, or only the last pipe can be read, I dont know why
+    // must close all write-ends, or only the last pipe can not be read, I dont know why
     for (int i=0; i<njob; i++) {
         close(jobs[i].fdw);
         fclose(jobs[i].fpw);
