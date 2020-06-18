@@ -11,10 +11,18 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include "gstring.h"
+struct pp_config {
+    char *cmd;
+    int njob;
+    int ispipe;
+    int header_n;
+    char *header_s;
+    int in_record_nline;
+    int out_record_nline;
+};
 
 #define gfree(x) do {if(x != NULL){free(x); x = NULL;}} while(0)
-
-int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nrow);
+int parapipe(struct pp_config*, gstr_t remain);
 
 ssize_t getline(char **, size_t*, FILE *);
 

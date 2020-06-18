@@ -4,6 +4,7 @@
 #include <getopt.h>
 #include <omp.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "vec.h"
 typedef vec_t(gstr_t) gvec_t;
 
@@ -14,26 +15,19 @@ int main(int argc, char*argv[]) {
                 Arguments:\n\
                 -j the number of jobs.\n\
                 -h the number of header, will repeat for each job.\n\
-                -r the number of lines per record, default 1.\n\
-                Notice: The input orders are not guaranteed\n.");
+                -r the number of lines per input record, default 1.\n\
+                -r2 the number of lines per output record, default 1.\n\
+                Notice: The orders of input ond output records are not guaranteed.\n");
         exit(11);
     }
     
-    struct config {
-        char *cmd;
-        int njob;
-        int ispipe;
-        int header;
-        int record_nline;
-    };
-
-    struct config config;
-    memset(&config, 0, sizeof(struct config));
+    struct pp_config config;
+    memset(&config, 0, sizeof(struct pp_config));
     config.njob = 2;
-    config.header = 0;
-    config.ispipe = 0;
-    config.record_nline = 1;
-    char *header = NULL;
+    config.header_n = 0;
+    config.in_record_nline = 1;
+    config.out_record_nline = 1;
+    config.header_s = NULL;
     gvec_t *header_vec = calloc(1, sizeof(gvec_t));
     config.cmd = argv[argc-1];
     argc-=2; argv++;
@@ -48,12 +42,22 @@ int main(int argc, char*argv[]) {
         }
     }
     if ((c = lgetopt(argc, argv, "-r", 1)) > 0) {
-        config.record_nline = atoi(argv[c]);
-        if (config.record_nline < 1) {
-            fprintf(stderr, "error: the number of lines per record must be larger than zero.\n");
+        config.in_record_nline = atoi(argv[c]);
+        if (config.in_record_nline < 1) {
+            fprintf(stderr, "error: the argument of -r is failed to parse.\n");
+            exit(11);
+        }
+        config.out_record_nline = config.in_record_nline;
+    }
+
+    if ((c = lgetopt(argc, argv, "-r2", 1)) > 0) {
+        config.out_record_nline = atoi(argv[c]);
+        if (config.out_record_nline < 1) {
+            fprintf(stderr, "error: the argument of -r2 is failed to parse.\n");
             exit(11);
         }
     }
+ 
     if ((c = lgetopt(argc, argv, "-h", 1)) > 0) {
         if (argv[c] != NULL) {
             if (argv[c][0] == '^') {
@@ -71,45 +75,45 @@ int main(int argc, char*argv[]) {
                     }
                 }
             } else {
-                config.header = atoi(argv[c]);
-                if (config.header < 1) {
+                config.header_n = atoi(argv[c]);
+                if (config.header_n < 1) {
                     fprintf(stderr, "error: the number of header must be larger than zero.\n");
                     exit(11);
                 }
             }
         } else {
-            config.header = 1;
+            config.header_n = 1;
         }
     }
 
     // printf("%s\n", config.cmd);
-    if (config.header > 0) {
-        gstr_t lines[config.header];
-        int nline = readlines(lines, config.header, stdin);
-        if (nline == config.header) {
+    if (config.header_n > 0) {
+        gstr_t lines[config.header_n];
+        int nline = readlines(lines, config.header_n, stdin);
+        if (nline == config.header_n) {
             int len  = 0;
             for (int i=0; i<nline; i++) {
                 len += lines[i].l;
             }
-            header = calloc(len+1, 1);
+            config.header_s = calloc(len+1, 1);
             len = 0;
             for (int i=0; i<nline; i++) {
-                memcpy(header + len, lines[i].s, lines[i].l);
+                memcpy(config.header_s + len, lines[i].s, lines[i].l);
                 len += lines[i].l;
             }
         }
     }
 
     if (header_vec->length > 0) {
-        assert(header == NULL);
+        assert(config.header_s == NULL);
         int len = 0;
         for (int i=0; i<header_vec->length; i++) {
             len += header_vec->data[i].l;
         }
-        header = calloc(len+1, 1);
+        config.header_s = calloc(len+1, 1);
         len = 0;
         for (int i=0; i<header_vec->length; i++) {
-            memcpy(header + len, header_vec->data[i].s, header_vec->data[i].l);
+            memcpy(config.header_s + len, header_vec->data[i].s, header_vec->data[i].l);
             len += header_vec->data[i].l;
             gfree(header_vec->data[i].s);
         }
@@ -118,8 +122,8 @@ int main(int argc, char*argv[]) {
     }
 
     omp_set_num_threads(config.njob);
-    parapipe(config.cmd, header, config.njob, remain, config.record_nline);
+    parapipe(&config, remain);
 
-    gfree(header);
+    gfree(config.header_s);
     return 0;
 }

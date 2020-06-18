@@ -46,12 +46,11 @@ static inline void destroy_gstr_vec (gstr_vec_t **gsv) {
 }
 
 struct job {
-    char *cmd;
+    struct pp_config* config;
     int  pid;
     int  fdr;
     int  old_fnctl;
     int  fdw;
-    int  out_record_nline;
     FILE *fpw;
     gstr_vec_t *readbuf;
     int  readbuf_nline;
@@ -115,12 +114,11 @@ void subprocess(char *cmd, int *pid, int *fdr, int *fdw) {
 }
 
 
-void init_job(struct job *job, char *cmd, int out_record_nline) {
-    job->out_record_nline = out_record_nline;
+void init_job(struct job *job, struct pp_config *config) {
+    job->config = config;
     job->readbuf = init_gstr_vec();
     job->readbuf_nline = 0;
-    job->cmd = cmd;
-    subprocess(cmd, &job->pid, &job->fdr, &job->fdw);
+    subprocess(config->cmd, &job->pid, &job->fdr, &job->fdw);
     int old_fnctl = fcntl(job->fdr, F_GETFL, 0);
     job->old_fnctl = old_fnctl;
     job->fpw = fdopen(job->fdw, "w");
@@ -149,10 +147,10 @@ void read_job(struct job *job) {
         nread = read(job->fdr, buf, JOBPARTSIZE);
         if (nread > 0) {
             char *p = buf - 1;
-            if (job->out_record_nline > 1) {
+            if (job->config->out_record_nline > 1) {
                 char *s = buf;
                 while(s < buf + nread) {
-                    if (*s == '\n' && ++job->readbuf_nline == job->out_record_nline) {
+                    if (*s == '\n' && ++job->readbuf_nline == job->config->out_record_nline) {
                         p = s;
                         job->readbuf_nline = 0;
                     }
@@ -205,19 +203,19 @@ char *memchr_rev(char *p, int c, int l) {
     else return p;
 }
 
-int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nline) {
-    struct job jobs[njob];
+int parapipe(struct pp_config* config, gstr_t remain) {
+    struct job jobs[config->njob];
     memset(jobs, 0, sizeof(struct job));
-    for (int i=0; i<njob; i++) {
+    for (int i=0; i<config->njob; i++) {
         struct job *job = &jobs[i];
-        init_job(job, cmd, record_nline);
-        if (header != NULL) {
-            fprintf(job->fpw, "%s", header);
+        init_job(job, config);
+        if (config->header_s != NULL) {
+            fprintf(job->fpw, "%s", config->header_s);
             fflush(job->fpw);
         }
     }
     //gstr_t remain = {0, NULL};
-    int chunk_size = JOBPARTSIZE * njob * 4;
+    int chunk_size = JOBPARTSIZE * config->njob * 4;
     char *chunk = malloc(chunk_size);
     size_t nread = 0;
     while ((nread = fread(chunk, 1, chunk_size, stdin))>0) {
@@ -237,7 +235,7 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nline)
         }
         npart = npart1;
 
-        if (record_nline > 1 && npart > 0) {
+        if (config->in_record_nline > 1 && npart > 0) {
             int n1 = 0;
             for(char *p = remain.s; p <remain.s + remain.l; p++) {
                 if (*p == '\n') n1++; 
@@ -257,8 +255,8 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nline)
             npart1 = 0;
             for (int i=0; i<npart; i++) {
                 n1 += part_nlines[i];
-                if (n1 >= record_nline) {
-                    n1 = n1 % record_nline;
+                if (n1 >= config->in_record_nline) {
+                    n1 = n1 % config->in_record_nline;
                     char *p = parts[i] - 1;
                     int  n = n1;
                     while(n > 0) {
@@ -308,7 +306,7 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nline)
             gfree(remain.s);
             remain = gs;
         }
-        for (int i=0; i<njob; i++) { fflush(jobs[i].fpw); }
+        for (int i=0; i<config->njob; i++) { fflush(jobs[i].fpw); }
     }
 
     if (remain.l > 0) {
@@ -320,12 +318,12 @@ int parapipe(char *cmd, char *header, int njob, gstr_t remain, int record_nline)
     gfree(chunk);
 
     // must close all write-ends, or only the last pipe can not be read, I dont know why
-    for (int i=0; i<njob; i++) {
+    for (int i=0; i<config->njob; i++) {
         close(jobs[i].fdw);
         fclose(jobs[i].fpw);
     }
 
-    for (int i=0; i<njob; i++) {
+    for (int i=0; i<config->njob; i++) {
         struct job *job = &jobs[i];
         // must change into block mode, ortherwise output incomplete results
         fcntl(job->fdr, F_SETFL, job->old_fnctl);
