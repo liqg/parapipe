@@ -67,7 +67,7 @@ int main(int argc, char*argv[]) {
                 }
                 while (1) {
                     int n = readlines(&remain, 1, stdin);
-                    if (n != 1 || gstrstartwith(remain, (gstr_t) {strlen(argv[c]), argv[c]+1})<0) {
+                    if (n != 1 || gstrstartwith(remain, (gstr_t) {strlen(argv[c]+1), argv[c]+1})<0) {
                         break;
                     } else {
                         vec_push(header_vec, remain);
